@@ -193,6 +193,52 @@ SELECT * FROM v_generic_pivot;
 
 如此一來，後端或前端報表工具甚至**完全不需要知道 refresh_pivot() 的存在**，只要專心 SELECT *，就能永遠拿到最新、欄位最正確的樞紐分析表！
 
+為了徹底解放後端，我們可以建立 **Trigger（觸發器）**。每當 `Sales` 表有任何影響欄位結構的異動（`INSERT`、`UPDATE`、`DELETE`）時，資料庫會自動執行 `refresh_pivot()`，實現真正**無感（Transparent）的自動化元編程**。
+
+```sql
+-- 1. 當有新銷售紀錄，或年份被修改時，觸發自動刷新
+CREATE TRIGGER IF NOT EXISTS trg_sales_auto_pivot_insert
+AFTER INSERT ON Sales
+BEGIN
+    SELECT refresh_pivot();
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_sales_auto_pivot_update
+AFTER UPDATE OF Year ON Sales -- 只有年份欄位被修改時才觸發，優化效能
+BEGIN
+    SELECT refresh_pivot();
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_sales_auto_pivot_delete
+AFTER DELETE ON Sales
+BEGIN
+    SELECT refresh_pivot();
+END;
+```
+
+### 🎯 自動化閉環流暢體驗
+有了 Trigger 之後，後端開發者的工作流將會簡化到不可思議：
+```sql
+-- 後端直接寫入全新年份的資料（例如目前表內只有 2024, 2025，現在寫入 2026）
+INSERT INTO Sales (Product, Year, Amount) VALUES ('Apple', 2026, 500);
+
+-- 什麼都不用做，直接查詢 View，這時候欄位已經完美多出了 "2026" 的實體欄位！
+SELECT * FROM v_dynamic_pivot;
+```
+
+---
+
+### ⚠️ 開發注意事項與架構優勢
+
+#### 架構優勢
+1. **零後端介入（Zero-Backend Overhead）**：透過 Trigger，後端完全不需要維護「何時該刷新 Pivot」的邏輯。不管是資料清洗、定時排程寫入，View 永遠處於最新狀態。
+2. **消滅後端 SQL 字串地獄**：不需要在 Python/Node.js 程式碼中用多行字串去硬拼接 DDL，資料庫邏輯完美留在資料庫內。
+3. **完美的相容性**：一旦 View 建立完成，任何簡單的 UI 報表工具或後端框架都可以用最直覺的 `SELECT * FROM v_dynamic_pivot` 讀取資料。
+
+#### 注意事項與效能優化
+* **高併發寫入效能**：由於 Trigger 會在每次 `INSERT` 時重新跑一次 `eval()` 與 `CREATE VIEW`（涉及系統表暫時鎖定），若系統有短時間內「萬級、百萬級列高頻寫入」的場景，**強烈建議不要用 Trigger**，應改為在批次寫入（Batch Import）完成後，手動呼叫一次 `SELECT refresh_pivot();` 以維護效能。
+* **記憶體限制**：SQLite 的 `group_concat` 預設字串長度上限通常為 1,000,000 字元。若轉置後的欄位高達數萬個，需注意是否觸發上限。
+* **安全性風險**：若參與轉置的資料（如 Year）包含使用者輸入的內容，必須防範 SQL 注入。此技巧建議僅用於**系統內部、資料受控**的分析報表場景。
 
 ---
 
