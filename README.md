@@ -342,7 +342,62 @@ FROM Sales;
 
 ---
 
-## 七.define() 功能續談
+## 七.要做為比較完整的類似預儲程序
+如果要作為一個 **「比較完整、功能健全的預存程序（Stored Procedure）」方案**，最適合、最強大的 **絕對是 sqlean-define。**
+
+0x09 的 sqlite-statement-vtab 雖然優雅，但它的技術邊界被限死在「唯讀的參數化查詢」；而 sqlean-define 配合其生態系，才能真正復刻傳統資料庫（如 SQL Server 的 T-SQL、Oracle 的 PL/SQL）中預存程序的核心靈魂。
+
+以下為您深度剖析為什麼在「完整度」上，sqlean-define 佔有壓倒性的優勢：
+
+---
+### 1. 預存程序必須具備「副作用（Side Effects）」：sqlean 完勝
+傳統的預存程序不是只有 SELECT 撈資料，更常做的是商業邏輯的寫入與異動（例如：扣除庫存、寫入日誌、更新狀態、甚至動態建表）。
+
+* 0x09 sqlite-statement-vtab（失敗）：
+它是「虛擬表（Virtual Table）」機制，底層只支援 SELECT。你無法在裡面寫 INSERT、UPDATE、DELETE 或 DDL（如 CREATE TABLE） [0x09/sqlite-statement-vtab]。它是一個純粹的「唯讀視圖（ReadOnly View）」。
+* sqlean-define（成功）：
+它可以搭配 eval() 執行動態語法。你可以把多條 INSERT、UPDATE 甚至 CREATE/DROP 語句用分號 ; 串接成字串，直接塞進 define() 中。這讓它具備了改寫資料庫狀態的能力，這才是真正的預存程序。
+```sql
+-- sqlean-define 獨家：可以做「寫入型」的預存程序SELECT define(
+    'sp_add_sale_and_log',
+    'eval(printf(
+        ''INSERT INTO Sales (Product, Year, Amount) VALUES ("%s", %d, %d); 
+          INSERT INTO AuditLogs (Action, Time) VALUES ("新增銷售", datetime("now"));'',
+        :product, :year, :amount
+    ))'
+);
+-- 呼叫預存程序（同時影響兩個表）SELECT sp_add_sale_and_log('Banana', 2026, 150);
+```
+---
+### 2. 多重陳述式與流程控制（Multi-Statement）：sqlean 的彈性更大
+完整的預存程序通常包含「先檢查 A 表，如果符合條件就更新 B 表，最後回傳 C 報表」的多步驟邏輯。
+
+* 0x09 sqlite-statement-vtab：
+只能包裝單一條 SELECT 語句。雖然你可以用複雜的 WITH (CTE) 或子查詢強行把邏輯塞在一起，但代碼會變得極難維護。
+* sqlean-define：
+配合 eval()，它允許你傳入一段包含多個分號的長 SQL 腳本。甚至如果你搭配 sqlean 家族的其他模組（如 text、crypto），你可以直接在 SQL 內部做更複雜的字串清洗與加密，更接近傳統預存程序的開發體驗。
+
+---
+### 3. 調用方式與語法直覺度
+
+* 0x09 sqlite-statement-vtab：
+每一次要建立一個新的「程序」，你就必須在資料庫裡建立一個實體的虛擬表（Schema 會多出一個 Table 物件）。
+* sqlean-define：
+它是透過記憶體內部的 Function Registry 來動態註冊函數。你可以隨時建立、覆蓋，而且調用時使用 SELECT my_proc();，在語法語意上更符合「執行一個程序」的直覺。
+
+------------------------------
+### 🏁 最終評定與總結
+
+* 0x09 sqlite-statement-vtab 的定位：
+它不是預存程序，它更像是 **「帶參數的檢視表（Parameterized View）」**。如果你的專案只需要「把常用的複雜 SELECT 撈資料邏輯打包起來，並傳入參數篩選」，它是極佳且高效率的選擇。
+* sqlean-define 的定位：
+它是真正的 **「預存程序與腳本引擎（Stored Procedure Engine）」**。只有它能兼顧「純量運算」、「寫入型邏輯（DML）」、「動態結構重塑（DDL）」與「多步驟腳本執行」。
+
+因此，如果要建立一個功能完整、能解決複雜商務邏輯（包含寫入與動態 Pivot）的類似預存程序架構，sqlean-define 是毫無疑問的首選。
+如果您的專案有大量商業邏輯需要從後端搬進 SQLite 執行，我們可以討論如何用 define 設計出更複雜的交易安全（Transaction）控制或錯誤處理機制！
+
+---
+## 八.define() 功能續談
 是的，這正是 define() 最迷人的地方。**它可以用「純 SQL」把一段複雜的 SQL 邏輯封裝成一個自訂函數（UDF），在 SQLite 中完美扮演了「預存程序（Stored Procedure）」或「自訂函式（Function）」的角色。**
 
 雖然 SQLite 官方因為輕量化設計，一直不肯加入 CREATE FUNCTION 或 CREATE PROCEDURE 語法，但 sqlean-define 透過 define() 函數，以一種非常巧妙的方式補齊了這個遺憾。
