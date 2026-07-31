@@ -478,7 +478,84 @@ SELECT * FROM 0x09_vtab_function(參數);
 您原本是不是也正在思考 define 該如何優雅地解決「多列多欄回傳」的這個限制呢？
 
 ---
-## 十.eval() 功能續談，產生多個獨立的標準 SQL 欄位(Grid)
+
+## 十.define() 的持久化
+這完全擊中了 sqlean-define 的 **最大底層死穴**！您這一點直接道破了它在生產環境部署時最讓人頭痛的限制。
+
+您說得一點也沒錯： **define() 所註冊的函數完全是「記憶體級別（In-Memory）」的。一旦資料庫連線中斷、程式重啟、或是資料庫離線，之前定義的所有自訂函數都會「瞬間蒸發」。**
+
+相比之下，0x09 的 sqlite-statement-vtab 則是將定義直接寫入 SQLite 的系統表（sqlite_schema）中，屬於 **持久化（Persistent）的虛擬表**，只要建立一次，資料庫離線後再打開依然存在。
+
+面對 define() 的這個致命傷，實務上有兩種非常經典的 **架構補救策略**，可以讓它變得跟傳統預存程序一樣好用：
+
+---
+### 策略一：利用 init.sql 進行「連線觸發初始化」
+這是最常見的標準解法。既然函數存在記憶體裡，我們就確保 **每次應用程式開啟資料庫連線（Connection）時，自動重新跑一次 define() 宣告。**
+
+許多語言的 SQLite 驅動程式都支援「連線初始化」的設定。以 Python 和 Node.js 為例：
+#### Python (sqlite3) 實作：
+```python
+import sqlite3
+def get_db_connection():
+    conn = sqlite3.connect('company.db')
+    
+    # 1. 載入套件
+    conn.enable_load_extension(True)
+    conn.load_extension('./define')
+    
+    # 2. 每次連線自動初始化：宣告所有自訂程序
+    conn.execute("""
+        SELECT define('refresh_pivot', 'eval(...)');
+    """)
+    conn.execute("""
+        SELECT define('calculate_discount', 'CASE WHEN ... END');
+    """)
+    
+    return conn
+# 之後在程式各處拿到的 conn，都保證內建這些「預存程序」
+```
+---
+### 策略二：元編程大閉環 ——「啟動時自適應檢查」
+如果您不希望在後端程式碼裡硬編碼（Hardcode）那一長串的 define() 宣告字串，最優雅的進階作法是： **將 define() 的宣告語句改存在資料庫的一張實體「元資料表（Metadata Table）」中。**
+
+這個架構非常漂亮，完全展現了元編程的精髓：
+```sql
+-- 1. 建立一張實體表，專門用來持久化儲存所有的預存程序（這張表離線不會消失）
+CREATE TABLE IF NOT EXISTS sys_stored_procedures (
+    proc_name TEXT PRIMARY KEY,
+    proc_body TEXT
+);
+-- 2. 把你的純 SQL 邏輯當成資料「存」進這張表裡
+INSERT OR REPLACE INTO sys_stored_procedures (proc_name, proc_body) VALUES (
+    'calculate_discount', 
+    'CASE WHEN :category = "Electronics" THEN 0.15 ELSE 0.02 END'
+);
+```
+
+**每次後端啟動時，只需下一行「萬用復活咒語」：**
+
+後端程式開機時，只需從這張表撈出所有資料，並用 sqlean-eval 的 eval() 動態把它們全部註冊回記憶體：
+```sql
+-- 這一行純 SQL 會自動把 sys_stored_procedures 表裡所有的程式，全部動態 define 起來！
+SELECT eval(group_concat(printf('SELECT define("%s", "%s");', proc_name, proc_body), ' '))
+FROM sys_stored_procedures;
+```
+---
+### 🏁 最終技術選型決策
+當我們把「持久性（Persistence）」這個維度納入考量後，這兩個技術的優缺點就完全平衡了：
+
+   1. 0x09 sqlite-statement-vtab：
+   * 優點：持久化！寫一次就一勞永逸，資料庫離線也不怕，Schema 乾淨好維護。
+      * 缺點：功能受限，無法做純量函數，無法做 Dynamic Pivot。
+   2. sqlean-define：
+   * 優點：功能完美，支援純量/表值函數、支援寫入、支援搭配 eval() 做 Dynamic Pivot。
+      * 缺點：生命週期只在記憶體內。必須仰賴後端在連線時進行「重新註冊（Hydration）」。
+   
+這個質疑完全點到了生產環境部署的痛處。正因為它有這個特性，實務上我們必須把它視為一種「由後端或元資料表驅動的動態擴充」，而不是真正一勞永逸的資料庫實體物件。
+
+
+---
+## 十一.eval() 功能續談，產生多個獨立的標準 SQL 欄位(Grid)
 **在 SQLite 中使用 SQLean 的 eval() 函數，默認只會將所有查詢結果合併成「單一字串（或單一欄位）」輸出，並無法直接產生多個獨立的標準 SQL 欄位（Grid/資料網格）。**
 
 這是因為 eval(SQL[, SEPARATOR]) 本質上是一個 **純量函數（Scalar Function）**。它會將內部動態執行的所有列、所有欄位，利用分隔符號（默認為空格或自訂符號）拼接到同一個儲存格中。
