@@ -438,9 +438,61 @@ define() 的出現，讓 SQLite 擁有了與大型資料庫（TSQL、PL/SQL）�
 
 * 以前：這些邏輯必須寫在 Python / Node.js 等後端程式碼裡。
 * 現在：你可以用「純 SQL」將邏輯直接寫在資料庫裡，打包成一個個乾淨的函數。
-
 ---
 
+## 九.eval() 功能續談，產生多個獨立的標準 SQL 欄位(Grid)
+**在 SQLite 中使用 SQLean 的 eval() 函數，默認只會將所有查詢結果合併成「單一字串（或單一欄位）」輸出，並無法直接產生多個獨立的標準 SQL 欄位（Grid/資料網格）。**
+
+這是因為 eval(SQL[, SEPARATOR]) 本質上是一個 **純量函數（Scalar Function）**。它會將內部動態執行的所有列、所有欄位，利用分隔符號（默認為空格或自訂符號）拼接到同一個儲存格中。
+
+如果您希望動態執行的 SQL 能夠呈現為多個獨立欄位與多行（Grid）的標準表格結構，需要改用以下兩種正規解決方案：
+### 方案一：改用 SQLean 虛擬表語法（推薦）
+SQLean 的 define 模組除了提供 eval()，更核心的功能是支援透過 create virtual table ... using define(...) 建立 **表值函數（Table-Valued Functions）**。這才是將動態 SQL 輸出為標準 Grid 欄位的正確做法。
+
+```sql
+-- 1. 使用 define 模組註冊一個虛擬表函數，定義內部動態 SQL 的邏輯與參數
+SELECT define('dynamic_grid', 'SELECT :id AS user_id, :name AS user_name, 28 AS age');
+-- 2. 像查詢標準資料表一樣查詢它，它會產生獨立的欄位（Grid）
+SELECT * FROM dynamic_grid('101', 'Alice');
+```
+
+輸出結果（標準 Grid 欄位）：
+
+| user_id | user_name | age |
+|---|---|---|
+| 101 | Alice | 28 |
+
+------------------------------
+### 方案二：搭配 SQLite 內建的 JSON 函數拆分（強行轉換法）
+如果您堅持一定要使用 eval() 函數，您必須在動態 SQL 內部將結果打包成 JSON 格式，外部再配合 SQLite 內建的 json_each 或 json_to_record 語法將其還原拆解成獨立欄位。
+
+```sql
+-- 1. 讓 eval 內部輸出 JSON 字串，並指定用特殊符號隔離（避免與 JSON 的逗號衝突）SELECT eval('SELECT json_object("id", 1, "name", ''Bob'', "score", 95)', '|');
+```
+
+這時 eval() 的輸出會是：{"id":1,"name":"Bob","score":95}
+```sql
+-- 2. 利用 json_extract 將單一字串拆解回標準 SQL 欄位（Grid）SELECT 
+    json_extract(eval_result, '$.id') AS id,
+    json_extract(eval_result, '$.name') AS name,
+    json_extract(eval_result, '$.score') AS scoreFROM (
+    SELECT eval('SELECT json_object("id", 1, "name", ''Bob'', "score", 95)') AS eval_result
+);
+```
+輸出結果（標準 Grid 欄位）：
+
+| id | name | score |
+|---|---|---|
+| 1 | Bob | 95 |
+
+---
+### 核心技術總結
+
+* eval() 限制：主要用於動態執行 DDL（如 CREATE、DROP）或 DML（INSERT），或者只需要獲取單一加總值的動態情境。
+* Grid 多欄位需求：請一律優先使用 SQLean 虛擬表（方案一），此方法效能最好，且欄位完全獨立。 [1, 3, 4, 5] 
+
+---
+# 雜談
 # 動態產生「排除特定欄位」的 SELECT 語句
 
 ## SQLite 預設不支援 SELECT * EXCLUDE (欄位)。
