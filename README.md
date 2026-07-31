@@ -23,3 +23,22 @@ FROM (SELECT DISTINCT Year FROM Sales ORDER BY Year);
 ```
 
 注意：此方法受限於 group_concat 的字串長度限制（預設 1,000,000 字元），且無法直接在同一個查詢中動態執行。
+
+
+
+---
+
+# 動態產生「排除特定欄位」的 SELECT 語句
+
+## SQLite 預設不支援 SELECT * EXCLUDE (欄位)。
+如果一張表有 50 個欄位，您只想排除掉 password 和 secret_key 兩個敏感欄位，可以這樣寫：
+```sql
+SELECT printf(
+    'SELECT %s FROM users;', 
+    group_concat(name, ', ')
+) AS dynamic_select_sql
+FROM pragma_table_info('users')
+WHERE name NOT IN ('password', 'secret_key'); -- 這裡輸入要排除的欄位
+```
+* 動態生成結果：
+SELECT id, username, email, created_at FROM users;
