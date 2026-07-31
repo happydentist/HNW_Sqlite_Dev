@@ -31,6 +31,43 @@ FROM (SELECT DISTINCT Year FROM Sales ORDER BY Year);
 
 eval() 函數在本質上是一個純量函數（Scalar Function），它預設只會將動態執行的結果轉成「單一字串」或單一欄位回傳。如果直接用它來跑複雜的 SELECT * 多欄位、多列報表，結果會全部縮在一起，完全失去樞紐分析表（Matrix/Grid）應有的欄位結構。因此，「動態覆蓋 View（檢視表）」，正是將元編程（Metaprogramming）與動態 SQL 發揮到極致的大師級經典解法。
 
+sqlean-eval 允許 SQLite 執行存在字串變數中的 SQL 語句。以下是搭配 eval() 實現動態 Pivot 的方案：
+### 核心實作語法
+在 SQLite 中，我們同樣使用 CASE WHEN 進行轉置，並利用 eval() 函數將動態拼接出來的 SQL 字串直接執行：
+```sql
+-- 載入 sqlean 擴充功能（依環境調整路徑）
+.load ./eval
+
+-- 元編程與動態執行核心
+SELECT eval(
+    -- 1. 使用 printf 與 group_concat 動態拼裝出完整的 SQL 語句
+    (
+        SELECT printf(
+            'SELECT Product, %s FROM Sales GROUP BY Product;',
+            group_concat(
+                printf('SUM(CASE WHEN Year = ''%s'' THEN Amount ELSE 0 END) AS "%s"', Year, Year)
+            )
+        )
+        FROM (SELECT DISTINCT Year FROM Sales ORDER BY Year)
+    )
+);
+```
+### 語法拆解說明
+* 內層查詢 (SELECT DISTINCT...)：
+  撈出所有不重複的年份（例如 2024, 2025），確保欄位是動態產生的。
+* printf('SUM(CASE...)...')：
+  將每個年份轉化為標準的 SQLite 轉置語法。
+* group_concat(...)：
+  將所有年份的 CASE WHEN 語句用逗號 , 串接在一起，變成一條長字串。
+* 外層 printf：
+  把串接好的轉置欄位，塞入 SELECT Product, ... FROM Sales GROUP BY Product; 的範本中。
+* eval(...)：
+  這是最關鍵的一步。它接收內層拼裝出來的完整 SQL 字串，並在 SQLite 引擎中即時編譯並執行，直接輸出最終的樞紐分析報表。
+
+### 使用此技巧的注意事項
+* 記憶體限制：group_concat 預設有字串長度限制（通常為 1,000,000 字元）。如果您的變動欄位（如 Year）高達數萬個，可能會觸發上限。
+* 安全風險：若 Year 欄位的資料來自使用者輸入，動態拼接可能引發 SQL 注入（SQL Injection）。請確保參與轉置的欄位資料是乾淨且受控的。
+
 ## 2. 實作範例
 核心策略：兩步流（Two-Step Pipeline）
 * 第一步（元編程重新整理）：利用 eval() 執行 DROP VIEW 與 CREATE VIEW，每次執行時，它會自動抓取當前最新的資料列，動態生成定義好的 View。
