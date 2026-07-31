@@ -616,10 +616,52 @@ SELECT eval('SELECT define(name, body) FROM my_functions');
 ```
 這樣一來，您就可以把所有的函數邏輯都集中管理在資料庫內部的資料表（my_functions）中了！
 
+重啟資料庫後，還能看到 sqlean_define 這張資料表，是因為 **SQLite 虛擬表的「結構定義」會被寫入資料庫的檔案中（永久保存）**。但重點在於：**裡面的資料（程式碼邏輯）依然會不見。**
 
+為了讓您完全理解這個現象，以下是 SQLite 與 sqlean 幕後的運作機制：
+
+### 1. 結構會留下，但內容會被排空
+在 SQLite 中，當一個擴充套件建立虛擬表時，SQLite 為了記錄這張表的存在，會把 CREATE VIRTUAL TABLE sqlean_define ... 這行結構永久寫進資料庫檔案的 sqlite_schema 系統表中。 [1] 
+* 這是為什麼您下次再打開同一資料庫時，依然看得到這張表。
+* 但是，虛擬表內部的資料與邏輯是存在記憶體中的。關閉資料庫後，表還在，但裡面原本定義好的自訂函數（內容）已經被清空了。 [2, 3, 4, 5] 
+
+## 2. 測試看看：您會發現它變成「空殼」
+您可以做一個簡單的實驗來驗證：
+
+   1. 開啟資料庫，定義一個函數：SELECT define('my_test', ':a + :b');
+   2. 查詢該表：SELECT * FROM sqlean_define;（此時會看到 my_test 的紀錄）
+   3. 關閉資料庫，重新打開。
+   4. 再次查詢該表：SELECT * FROM sqlean_define;
+
+這時候您會發現， **資料表依然存在，但裡面已經沒有任何資料了（變成空表）**，而您先前定義的 my_test() 函數也會失效（報錯找不到函數）。 
 
 ---
-**完整過程**
+
+### 最完美的自動化解決方案
+既然您希望「完全不用每次手動載入」，利用 SQLite 會把結構留下來的特性，最聰明、最優雅的做法是改用 「觸發器 (Trigger)」 來實現開機自動還原！
+您只需要在資料庫中做一次性設定，以後每次開啟資料庫就不需要再管它了：
+```sql
+-- 1. 建立一張您專屬的實體資料表（永久保存程式碼）
+CREATE TABLE IF NOT EXISTS my_custom_code (
+    name TEXT PRIMARY KEY,
+    body TEXT
+);
+-- 2. 把您的日期相減邏輯存進去（這是一次性的，永遠不會消失）
+INSERT OR REPLACE INTO my_custom_code (name, body)
+VALUES ('days_diff', 'CAST(julianday(:end_date) - julianday(:start_date) AS INT)');
+-- 3. 建立一個 SQLite 系統內建的觸發器（當 sqlean_define 虛擬表被初始化載入時，自動把實體表的代碼倒進去）
+CREATE TRIGGER IF NOT EXISTS auto_load_functions
+AFTER INSERT ON sqlean_define
+FOR EACH ROW
+WHEN (SELECT COUNT(*) FROM sqlean_define) = 0 -- 如果發現裡面是空的
+BEGIN
+    SELECT eval('SELECT define(name, body) FROM my_custom_code');
+END;
+```
+透過這種設計，您就成功利用了 SQLite 虛擬表的留存特性，同時又完美解決了記憶體資料消失的問題！
+
+---
+**整個完整過程**
 
 這是一個環環相扣的完整流程。因為 define 擴充套件 的 **sqlean_define虛擬表結構會永久保留在檔案中，但裡面的自訂函數資料會在關閉時被清空**，所以我們必須將「永久儲存」與「開機自動載入」兩個動作串聯起來。
 以下是完整的設定與執行流程，總共分為三個階段：
