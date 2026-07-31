@@ -188,8 +188,10 @@ SELECT * FROM v_generic_pivot;
 
 如果想進一步了解如何將這個機制與 SQLite 的觸發器（Trigger） 綁定，讓它在每次資料 INSERT 時「完全自動化」刷新欄位結構，可以告訴我您的應用場景！
 
+## 五.加入 SQLite Trigger（觸發器）自動自動更新
+這部分是非常經典的「數據驅動架構（Data-Driven Architecture）」閉環。透過 **SQLite Trigger（觸發器）**，我們可以做到：每當 Sales 資料表有新資料寫入（INSERT）或年份變更（UPDATE）時，資料庫會**自動在背後觸發元編程邏輯**，重新刷新 v_dynamic_pivot 檢視表的欄位結構。
 
-
+如此一來，後端或前端報表工具甚至**完全不需要知道 refresh_pivot() 的存在**，只要專心 SELECT *，就能永遠拿到最新、欄位最正確的樞紐分析表！
 
 
 ---
