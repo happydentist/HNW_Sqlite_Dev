@@ -296,6 +296,8 @@ SELECT * FROM get_sales_by_year(2026);
 ### D.總結
 0x09 的 sqlite-statement-vtab 是一個優雅的參數化查詢封裝器；而 sqlean 的 define() 搭配 eval() 則是一個真正的動態程式碼執行引擎（元編程核心）。要解決「動態樞紐分析」這種欄位不確定的硬骨頭，只有後者這種具備動態重塑結構能力的工具才能完美勝任。 
 
+## 七.define() 功能續談
+
 
 ---
 
