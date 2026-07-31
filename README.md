@@ -281,6 +281,34 @@ SELECT * FROM get_sales_by_year(2026);
 
 ---
 ### C.技術選型建議：兩者該怎麼選？
+0x09 的 sqlite-statement-vtab 是「無法」用來建立純量（Scalar）SQL 函數的。
+
+這是由它的技術本質所決定的。
+#### 核心原因：它是「虛擬表（Virtual Table）」，不是「函數」
+在 SQLite 的底層架構中，擴充功能主要分為兩大派系：
+* **1.使用者自訂函數 (UDF)：**
+  像是 sqlean-define 建立的 calculate_discount()。它輸入一個或多個參數，運算後**回傳單一數值（純量）**。
+* **2.虛擬表 (Virtual Table)：**
+  這正是 0x09 sqlite-statement-vtab 的技術基礎。在 SQLite 中，虛擬表的本質**永遠是一張二維表格（Table）**，它必須透過 FROM 子句來呼叫。
+#### 語法上的致命限制因為
+sqlite-statement-vtab 的語法是 CREATE VIRTUAL TABLE ...，就算您用它來包裝一段只會回傳「單一數值」的 SELECT 語句，它在 SQLite 眼中依然是一張 **「只有 1 列、1 欄的表格」。**
+
+這會導致在實際撰寫 SQL 時非常不直覺：
+##### ❌ 0x09 辦不到的「純量函數」寫法：
+您無法像內建函數（如 ABS()、UPPER()）那樣，直接把它塞在 SELECT 的欄位清單中：
+```sql
+-- 這是錯誤語法！SQLite 會報錯，因為 get_discount 是個虛擬表，不能當純量函數用
+SELECT Product, get_discount(Category, Amount) FROM Sales;
+```
+##### ⚠️ 0x09 必須妥協的「子查詢」寫法：
+如果您硬要用 0x09 實現純量運算，您必須強行使用關聯子查詢（Correlated Subquery）或 JOIN，語法會變得極度臃腫：
+```sql
+-- 必須用 FROM 呼叫，並用子查詢包裝，效能與可讀性極差
+SELECT 
+    Product, 
+    (SELECT discount FROM get_discount_vtab(Sales.Category, Sales.Amount)) AS Discount
+FROM Sales;
+```
 #### 什麼時候該用 0x09 的 sqlite-statement-vtab？
 
 * 不需要變動欄位數量：只是想做類似 PostgreSQL 或 SQL Server 的「表值函數（Table-Valued Function）」。
