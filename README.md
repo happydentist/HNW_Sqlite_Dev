@@ -556,6 +556,71 @@ FROM sys_stored_procedures;
 ---
 
 ## 十一.define() 的持久化二
+透過 define 模組建立的函數是 **暫時性（In-Memory）**的。它們只存在於當前的資料庫連線（Connection）中。一旦你關閉資料庫連線、重啟程式、或關閉終端機，這些自訂函數就會從記憶體中抹除。
+
+如果你希望每次開啟資料庫都能使用這些函數，有以下兩種解決方案：
+
+### 1. 建立啟動腳本（最推薦）
+將加載擴充套件與定義函數的 SQL 語法寫在同一個 .sql 檔案中（例如 init.sql），每次連線時優先執行它。
+init.sql 內容：
+```sql
+.load ./define
+SELECT define('days_diff', 'CAST(julianday(:end_date) - julianday(:start_date) AS INT)');
+SELECT define('mins_diff', 'CAST((julianday(:end_time) - julianday(:start_time)) * 24 * 60 AS INT)');
+```
+
+* 命令列啟動方式：sqlite3 mydata.db < init.sql
+* 程式碼中啟動方式：在連線成功後，第一時間執行該檔案的內容。
+
+### 2. 利用 SQLite 檢視表 (View) 永久保存邏輯
+如果你不想每次都重新 define，可以將計算邏輯直接寫死在 View 裡面。View 是永久儲存在資料庫檔案中的，關閉再打開也不會消失。
+```sql
+-- 這是一次性設定，會永久保存在資料庫中
+CREATE VIEW v_orders_duration ASSELECT 
+    order_id,
+    order_date,
+    shipped_date,
+    CAST(julianday(shipped_date) - julianday(order_date) AS INT) AS shipping_days
+FROM orders;
+-- 以後不論何時開啟資料庫，直接查詢這個 View 即可
+SELECT * FROM v_orders_duration;
+```
+
+define 模組不是有一張表嗎???
+
+define 模組內確實存在一張名為 **sqlean_define** 的資料表（這是一張虛擬表 Virtual Table），裡面儲存了您定義的所有自訂函數原始碼。
+
+當您執行 SELECT * FROM sqlean_define; 時，就能看到目前記憶體裡儲存的自訂函數清單。
+
+### 為什麼這張表不能直接用來「永久保存」？
+雖然有這張表，但因為 sqlean_define 是 **虛擬表（存放在暫時的記憶體中）**，所以只要資料庫關閉（連線斷開），這張表裡的內容就會跟著消失。
+### 替代方案：自己建立一張「實體表」來永久儲存程式碼
+如果您想要利用「資料表儲存程式碼」的概念來達到關閉不遺失的效果，可以自己建立一張真實的資料表（例如 my_functions），把定義函數的 SQL 語句當作文字存進去：
+```sql
+-- 1. 建立一張實體表，這會永久保存在您的資料庫檔案中
+CREATE TABLE IF NOT EXISTS my_functions (
+    name TEXT PRIMARY KEY,
+    body TEXT
+);
+-- 2. 把計算日期差的程式碼存進去（這只需要存一次，關閉不消失）
+INSERT OR REPLACE INTO my_functions (name, body)
+VALUES ('days_diff', 'CAST(julianday(:end_date) - julianday(:start_date) AS INT)');
+```
+### 如何在重新開啟資料庫時「一鍵載入」？
+下次重新開啟資料庫時，您只要加載 define 擴充套件，並結合 eval() 函數，就能把這張實體表內儲存的程式碼一次全部註冊成自訂函數：
+```sql
+-- 載入擴充套件
+.load ./define
+-- 透過 eval 跑動態 SQL，自動把實體表裡的定義全部寫入 sqlean_define 虛擬表中
+SELECT eval('SELECT define(name, body) FROM my_functions');
+```
+這樣一來，您就可以把所有的函數邏輯都集中管理在資料庫內部的資料表（my_functions）中了！
+
+
+
+---
+**完整過程**
+
 這是一個環環相扣的完整流程。因為 define 擴充套件 的 **sqlean_define虛擬表結構會永久保留在檔案中，但裡面的自訂函數資料會在關閉時被清空**，所以我們必須將「永久儲存」與「開機自動載入」兩個動作串聯起來。
 以下是完整的設定與執行流程，總共分為三個階段：
 
