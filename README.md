@@ -661,6 +661,44 @@ END;
 透過這種設計，您就成功利用了 SQLite 虛擬表的留存特性，同時又完美解決了記憶體資料消失的問題！
 
 ---
+**但 0x09/sqlite-statement-vtab 專案 虛擬表可儲存**
+
+您的理解非常到位，而且切中了 SQLite 虛擬表的核心設計本質！
+
+您提到的 [0x09/sqlite-statement-vtab](https://github.com/0x09/sqlite-statement-vtab) 確實可以做到「關閉資料庫後再打開，內容依然存在」。這與 sqlean_define 產生了截然不同的行為，其核心原因在於 **兩者的參數傳遞方式與背後的儲存機制（Storage Backend）完全不同。**
+
+以下為您詳細拆解為什麼 sqlite-statement-vtab 能存住內容，而 sqlean_define 卻辦不到：
+
+### 1. 0x09/sqlite-statement-vtab 的原理：將程式碼寫死在「結構定義」中
+當您使用 sqlite-statement-vtab 建立虛擬表時，語法通常是這樣的：
+```sql
+CREATE VIRTUAL TABLE my_view USING statement((
+    SELECT 1 as a, 2 as b -- 您的 SQL 程式碼被包裹在這裡
+));
+```
+* **關鍵點：** 您的 SQL 程式碼是作為 CREATE VIRTUAL TABLE 語句的參數直接傳入的。
+* **SQLite 的機制：** SQLite 核心會把完整的 CREATE VIRTUAL TABLE ... USING statement((...)) 這段文字，一字不漏地寫入硬碟中的 sqlite_schema 系統表裡。
+* **重啟後的行為：** 下次重啟資料庫時，sqlite-statement-vtab 模組會向 SQLite 讀取當年那段「結構定義文字」，從中把您包在裡面的 SQL 語句重新解析出來。因此它能「記住」內容，因為 **內容已經變成結構的一部分，被固化在硬碟中了。** 
+---
+### 2. sqlean_define 的原理：動態插入，純記憶體儲存
+相反地，sqlean_define 的設計是模仿真實資料表的 INSERT 行為：
+
+   1. 您在建立時，只是建立了一個乾淨、空的虛擬表：CREATE VIRTUAL TABLE sqlean_define USING define;（此時硬碟只存了這行結構文字）。
+   2. 當您執行 SELECT define('my_func', '...'); 時，本質上是在 **資料庫啟動後，動態將程式碼寫入底層的 C 語言記憶體結構（RAM）中。**
+   3. sqlean_define 模組的底層並沒有寫入硬碟檔案的邏輯（它沒有實作 SQLite 虛擬表的磁碟寫入接口）。所以只要連線一斷，記憶體釋放，裡面動態寫入的函數就全部煙消雲散了。
+
+---
+### 總結對比表
+
+| 特性 | sqlean_define | 0x09/sqlite-statement-vtab |
+|---|---|---|
+| 程式碼儲存位置 | 執行期的記憶體 (RAM) 中 | 硬碟中的 sqlite_schema 系統表中 |
+| 重啟後內容是否留存 | ❌ 否（變回空表） | 是（自動從結構文字中還原） |
+| 設計目的 | 動態、隨時建立與刪除自訂標量函數。 | 將複雜的 SELECT 語句包裝成虛擬表或表值函數。 |
+
+這就是為什麼在面對 sqlean_define 時，我們必須自己建立一張實體表和觸發器，手動去模擬類似 sqlite-statement-vtab 那種把資料固化在硬碟、並在重啟時自動還原的效果。
+
+---
 **整個完整過程**
 
 這是一個環環相扣的完整流程。因為 define 擴充套件 的 **sqlean_define虛擬表結構會永久保留在檔案中，但裡面的自訂函數資料會在關閉時被清空**，所以我們必須將「永久儲存」與「開機自動載入」兩個動作串聯起來。
