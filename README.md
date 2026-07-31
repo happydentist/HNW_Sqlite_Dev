@@ -479,7 +479,7 @@ SELECT * FROM 0x09_vtab_function(參數);
 
 ---
 
-## 十.define() 的持久化
+## 十.define() 的持久化一
 這完全擊中了 sqlean-define 的 **最大底層死穴**！您這一點直接道破了它在生產環境部署時最讓人頭痛的限制。
 
 您說得一點也沒錯： **define() 所註冊的函數完全是「記憶體級別（In-Memory）」的。一旦資料庫連線中斷、程式重啟、或是資料庫離線，之前定義的所有自訂函數都會「瞬間蒸發」。**
@@ -553,9 +553,85 @@ FROM sys_stored_procedures;
    
 這個質疑完全點到了生產環境部署的痛處。正因為它有這個特性，實務上我們必須把它視為一種「由後端或元資料表驅動的動態擴充」，而不是真正一勞永逸的資料庫實體物件。
 
+---
+
+## 十一.define() 的持久化二
+這是一個環環相扣的完整流程。因為 define 擴充套件 的 **sqlean_define虛擬表結構會永久保留在檔案中，但裡面的自訂函數資料會在關閉時被清空**，所以我們必須將「永久儲存」與「開機自動載入」兩個動作串聯起來。
+以下是完整的設定與執行流程，總共分為三個階段：
 
 ---
-## 十一.eval() 功能續談，產生多個獨立的標準 SQL 欄位(Grid)
+### 第一階段：一次性初始化（只需執行一次）
+這個階段的目的是在你的資料庫檔案中，建立用來「永久保存程式碼」的實體表，以及「自動還原函數」的觸發器。
+
+請打開你的 SQLite 工具，依序執行以下 SQL 語句：
+
+#### 步驟 1：載入 define 模組
+```sql
+.load ./define
+```
+(如果是使用 DBeaver 等圖形工具，請確保已透過其設定載入該擴充套件)
+## 步驟 2：建立實體資料表（永久儲存你的程式碼）
+
+這是一張真實的表，關閉資料庫後，裡面的文字絕對不會消失。
+```sql
+CREATE TABLE IF NOT EXISTS my_custom_code (
+    func_name TEXT PRIMARY KEY,
+    func_body TEXT
+);
+```
+## 步驟 3：建立自動載入觸發器 (Trigger)
+這是最關鍵的步驟！我們利用 SQLite 的觸發器，設定當系統重啟、sqlean_define 被重新呼叫時， **自動**把實體表 my_custom_code 裡的程式碼撈出來，重新註冊進 define 模組中。
+```sql
+CREATE TRIGGER IF NOT EXISTS auto_load_functions
+AFTER INSERT ON sqlean_define
+FOR EACH ROW
+WHEN (SELECT COUNT(*) FROM sqlean_define) = 0
+BEGIN
+    SELECT eval('SELECT define(func_name, func_body) FROM my_custom_code');
+END;
+```
+---
+
+### 第二階段：存入與管理你的自訂函數
+每當你想新增或修改自訂函數時， **不要**直接去執行 SELECT define(...)，而是要把邏輯寫入我們剛剛建立的 my_custom_code 實體表中。
+#### 步驟 4：寫入「日期相減」與「數值相減」的邏輯
+```sql
+-- 存入計算天數差的函數
+INSERT OR REPLACE INTO my_custom_code (func_name, func_body) VALUES ('days_diff', 'CAST(julianday(:end_date) - julianday(:start_date) AS INT)');
+-- 存入計算普通數值差的函數
+INSERT OR REPLACE INTO my_custom_code (func_name, func_body) VALUES ('num_diff', ':a - :b');
+```
+#### 步驟 5：手動觸發第一次載入（或直接重啟資料庫）
+因為我們剛把資料存進實體表，此時記憶體可能還沒有更新，你可以手動執行這行，讓它立刻生效：
+```sql
+SELECT eval('SELECT define(func_name, func_body) FROM my_custom_code');
+```
+---
+### 第三階段：日常使用與驗證（以後每次打開資料庫）
+完成上述設定後，以後不論你關閉資料庫多少次，再次打開時，請遵循以下順序：
+#### 步驟 6：每次開啟資料庫的第一件事（必要動作）
+你唯一需要手動做的事情，就是把 define 模組載入進來：
+```sql
+.load ./define
+```
+#### 步驟 7：直接呼叫函數（自動還原生效）
+此時你不需要重新定義函數，直接呼叫你之前存好的 days_diff：
+```sql
+SELECT days_diff('2026-12-31', '2026-12-25') AS result;
+```
+
+* **幕後運作原理：** 當你呼叫 days_diff 時，SQLite 會去檢查 sqlean_define 虛擬表。由於重啟後裡面是空的，這會觸發我們在步驟 3 寫好的 auto_load_functions 觸發器。觸發器會瞬間把 my_custom_code 裡的程式碼讀取並自動執行 define，讓你的自訂函數在毫秒內「復活」並吐出正確結果（回傳 6）。
+
+------------------------------
+### 流程檢查清單（Troubleshooting）
+如果你的函數沒有如預期運作，請依序檢查這三張表：
+
+   1. SELECT * FROM sqlite_schema; ➜ 檢查 my_custom_code 表和 auto_load_functions 觸發器是否還在。
+   2. SELECT * FROM my_custom_code; ➜ 檢查你的函數原始碼有沒有好好地存進去。
+   3. SELECT * FROM sqlean_define; ➜ 檢查在執行完步驟 7 後，這裡面是不是自動出現了函數清單。
+
+---
+## 十二.eval() 功能續談，產生多個獨立的標準 SQL 欄位(Grid)
 **在 SQLite 中使用 SQLean 的 eval() 函數，默認只會將所有查詢結果合併成「單一字串（或單一欄位）」輸出，並無法直接產生多個獨立的標準 SQL 欄位（Grid/資料網格）。**
 
 這是因為 eval(SQL[, SEPARATOR]) 本質上是一個 **純量函數（Scalar Function）**。它會將內部動態執行的所有列、所有欄位，利用分隔符號（默認為空格或自訂符號）拼接到同一個儲存格中。
