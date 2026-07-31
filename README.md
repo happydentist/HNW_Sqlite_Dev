@@ -240,6 +240,63 @@ SELECT * FROM v_dynamic_pivot;
 * **記憶體限制**：SQLite 的 `group_concat` 預設字串長度上限通常為 1,000,000 字元。若轉置後的欄位高達數萬個，需注意是否觸發上限。
 * **安全性風險**：若參與轉置的資料（如 Year）包含使用者輸入的內容，必須防範 SQL 注入。此技巧建議僅用於**系統內部、資料受控**的分析報表場景。
 
+## 六.define() 功能與  0x09/sqlite-statement-vtab 比較
+將 sqlean 的 define()（本質上基於內置純量/表值函數擴充）與 0x09 大神的 sqlite-statement-vtab 進行比較，可以說是觸及了 SQLite 元編程的「兩大門派」。
+事實上，sqlean-define 模組的底層在開發時，很大一部分靈感就是借鑑並改編自 0x09 的 sqlite-statement-vtab。兩者雖然都能在 SQLite 中實現類似預存程序的功能，但其核心機制、欄位定義時機以及對動態樞紐分析（Dynamic Pivot）的適用性有著本質上的區別。
+
+---
+### A.一張圖表看懂核心差異
+
+| 特性比較 | sqlean 的 define() | 0x09 的 sqlite-statement-vtab |
+|---|---|---|
+| 技術本質 | 標量函數 (Scalar) / 表值函數庫 | 虛擬表機制 (Virtual Table) |
+| 語法結構 | SELECT define('name', 'body') | CREATE VIRTUAL TABLE name USING statement(...) |
+| 欄位結構決定時機 | 動態（編譯時才決定） | 靜態（虛擬表建立時就必須宣告） |
+| 參數化查詢 | 支援（使用具名綁定變數 :param） | 支援（可直接作為 TVF 傳入參數） |
+| 動態 DDL 執行 | 支援（透過內置 eval() 跑 DDL） | 不支援（僅限 Prepared Statement 查詢） |
+| 對動態 Pivot 的難易度 | 極其簡單（配合 View 與 Trigger 閉環） | 極其困難（甚至無法原生做到） |
+
+------------------------------
+### B.為什麼在「動態 Pivot」場景，sqlean 的 define() 完勝？
+關鍵在於 「欄位名稱與數量的決定時機」。
+#### 1. 0x09 sqlite-statement-vtab 的限制：
+statement-vtab 的本質是建立一個虛擬表（Virtual Table）。SQLite 的虛擬表在宣告的那一刻（CREATE VIRTUAL TABLE），就必須明確告訴 SQLite 引擎這張表有哪些欄位、欄位名稱是什麼。
+當你嘗試用它來做動態 Pivot 時，因為你的年份（如 2024, 2025, 2026...）是隨著資料動態增長的，statement-vtab 無法在不重新建立虛擬表的情況下，動態增加回傳的欄位數量。它適合的是「參數化查詢（帶參數的 View）」，例如：
+```sql
+-- statement-vtab 的典型強項：參數化查詢，但欄位（Product, Amount）是寫死的
+CREATE VIRTUAL TABLE get_sales_by_year USING statement((
+    SELECT Product, Amount FROM Sales WHERE Year = :year
+));
+-- 查詢時帶入參數
+SELECT * FROM get_sales_by_year(2026);
+```
+#### 2. sqlean 的 define() + eval() 的降維打擊：
+誠如您前面所提到的靈感，sqlean 之所以能搞定動態 Pivot，是因為它跳脫了查詢限制，改用語法去「驅動 DDL 來重建實體 View」。 
+
+* define() 裡面包的是 eval()。
+* eval() 跑的是 DROP VIEW 與 CREATE VIEW 這種會重塑資料庫結構的指令。
+* 重新建立的實體 View，其欄位是交由 SQLite 的 SQL 解析器在執行 DDL 時當場計算出來的。 [4] 
+
+這使得 sqlean 的方案具有極致的動態性，欄位能隨著資料橫向無限延伸。
+
+---
+### C.技術選型建議：兩者該怎麼選？
+#### 什麼時候該用 0x09 的 sqlite-statement-vtab？
+
+* 不需要變動欄位數量：只是想做類似 PostgreSQL 或 SQL Server 的「表值函數（Table-Valued Function）」。
+* 需要極致的查詢效能：因為它是將 SQL 編譯為 Prepared Statement 快取在連線中，如果是單純的固定欄位參數化查詢，它的執行速度與記憶體效率會比頻繁拼接字串的 eval() 高非常多。 [1] 
+* 不想動到 Schema：不想在資料庫裡频繁 DROP/CREATE 任何 View，希望保持 MetaData 的乾淨。
+
+#### 什麼時候必須用 sqlean 的 define() + eval()？
+
+* 欄位會隨著資料列改變（即本主題的 Dynamic Pivot）。
+* 需要執行非 SELECT 語句：例如要在自訂函數中順便執行 INSERT、UPDATE、或動態建表（DDL）。
+* 需要打造一個通用型的 SQL 產生器（如前面示範的傳入表名、欄位名就能自動組裝結構的工具）。
+
+### D.總結
+0x09 的 sqlite-statement-vtab 是一個優雅的參數化查詢封裝器；而 sqlean 的 define() 搭配 eval() 則是一個真正的動態程式碼執行引擎（元編程核心）。要解決「動態樞紐分析」這種欄位不確定的硬骨頭，只有後者這種具備動態重塑結構能力的工具才能完美勝任。 
+
+
 ---
 
 # 動態產生「排除特定欄位」的 SELECT 語句
