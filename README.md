@@ -11,6 +11,8 @@ SELECT
 FROM Sales
 GROUP BY Product;
 ```
+---
+
 ## 二.SQLite 純 SQL 的極限替代方案
 如果不想用外部程式，且在某些特定終端機介面下，SQLite 唯一的純 SQL 歪招是利用 printf 和 group_concat 拼出 SQL 字串，但你仍得手動複製該字串去執行：
 ```sql
@@ -23,6 +25,8 @@ FROM (SELECT DISTINCT Year FROM Sales ORDER BY Year);
 ```
 
 注意：此方法受限於 group_concat 的字串長度限制（預設 1,000,000 字元），且無法直接在同一個查詢中動態執行。
+
+---
 
 ## 三.搭配 Sqlean 的 eval()
 
@@ -107,6 +111,8 @@ SELECT * FROM v_dynamic_pivot;
 #### * 自動適應資料變更：
   每當資料庫新增了新的年份（例如多出了 2026, 2027），後端只需要在查詢前重新呼叫一次「步驟一」的 SQL，View 就會自動與時俱進，完成自動化元編程的閉環。「透過 eval() 驅動 DDL 來重建 View」的思維，確實是 SQLite 圈子裡處理動態樞紐分析最漂亮、含金量最高的操作。
 
+---
+
 ## 四.搭配 Sqlean 的 define()
 搭配 sqlean 的 define() 擴充功能，會把這套動態 Pivot 的元編程技巧推向另一個完全不同的層次：**將複雜的字串拼接與 DDL 重建邏輯，完美封裝成一個自訂的預存程序（Stored Procedure）或函式**。
 
@@ -188,6 +194,8 @@ SELECT * FROM v_generic_pivot;
 
 如果想進一步了解如何將這個機制與 SQLite 的觸發器（Trigger） 綁定，讓它在每次資料 INSERT 時「完全自動化」刷新欄位結構，可以告訴我您的應用場景！
 
+---
+
 ## 五.加入 SQLite Trigger（觸發器）自動自動更新
 這部分是非常經典的「數據驅動架構（Data-Driven Architecture）」閉環。透過 **SQLite Trigger（觸發器）**，我們可以做到：每當 Sales 資料表有新資料寫入（INSERT）或年份變更（UPDATE）時，資料庫會**自動在背後觸發元編程邏輯**，重新刷新 v_dynamic_pivot 檢視表的欄位結構。
 
@@ -239,6 +247,8 @@ SELECT * FROM v_dynamic_pivot;
 * **高併發寫入效能**：由於 Trigger 會在每次 `INSERT` 時重新跑一次 `eval()` 與 `CREATE VIEW`（涉及系統表暫時鎖定），若系統有短時間內「萬級、百萬級列高頻寫入」的場景，**強烈建議不要用 Trigger**，應改為在批次寫入（Batch Import）完成後，手動呼叫一次 `SELECT refresh_pivot();` 以維護效能。
 * **記憶體限制**：SQLite 的 `group_concat` 預設字串長度上限通常為 1,000,000 字元。若轉置後的欄位高達數萬個，需注意是否觸發上限。
 * **安全性風險**：若參與轉置的資料（如 Year）包含使用者輸入的內容，必須防範 SQL 注入。此技巧建議僅用於**系統內部、資料受控**的分析報表場景。
+
+---
 
 ## 六.define() 功能與  0x09/sqlite-statement-vtab 比較
 將 sqlean 的 define()（本質上基於內置純量/表值函數擴充）與 0x09 大神的 sqlite-statement-vtab 進行比較，可以說是觸及了 SQLite 元編程的「兩大門派」。
@@ -327,6 +337,7 @@ FROM Sales;
 1. **必須選 `sqlean-define` 的場景**：需要處理 **Dynamic Pivot** 等欄位數量不固定的場景，或是函數內部需要動態組裝字串、執行 `INSERT/UPDATE/DDL` 等非唯讀操作。
 2. **可以選 `statement-vtab` 的場景**：純粹做固定欄位的「參數化查詢（如上述的表值函數）」
 
+---
 
 ## 七.define() 功能續談
 是的，這正是 define() 最迷人的地方。**它可以用「純 SQL」把一段複雜的 SQL 邏輯封裝成一個自訂函數（UDF），在 SQLite 中完美扮演了「預存程序（Stored Procedure）」或「自訂函式（Function）」的角色。**
