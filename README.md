@@ -507,3 +507,58 @@ WHERE name NOT IN ('password', 'secret_key'); -- 這裡輸入要排除的欄位
 ```
 * 動態生成結果：
 SELECT id, username, email, created_at FROM users;
+
+---
+
+# 根據某欄位產生的值，動態產生 CASE WHEN 語句
+要利用 printf() 根據某個欄位的現有資料，動態生成一整段 CASE WHEN 語句，通常需要搭配 SQLite 的 **字串聚合函數 group_concat()。**
+
+這樣可以將多行獨立的 WHEN ... THEN ... 串接成一個完整的 SQL 片段。
+
+以下為您提供完整的實戰範例與步驟：
+## 🎯 實戰目標
+假設您有一張「折扣對照表」discount_rules，裡面記錄了不同會員等級的折扣率：
+
+| level (欄位) | rate (欄位) |
+|---|---|
+| VIP | 0.8 |
+| Gold | 0.9 |
+| Normal | 1.0 |
+
+我們希望動態產生出這段 SQL 程式碼：
+```sql
+CASE level WHEN 'VIP' THEN 0.8 WHEN 'Gold' THEN 0.9 WHEN 'Normal' THEN 1.0 ELSE 1.0 END
+```
+---
+## 💻 動態生成語法
+請在 SQLite 中執行下方語句，它會自動讀取資料表並拼裝出完整的 CASE WHEN：
+```sql
+SELECT printf(
+    'CASE level %s ELSE 1.0 END', 
+    group_concat(printf('WHEN ''%s'' THEN %.1f', level, rate), ' ')
+) AS dynamic_case_sqlFROM discount_rules;
+```
+## 🔍 語法拆解說明
+
+   1. 內層 printf('WHEN ''%s'' THEN %.1f', level, rate)
+   * 將每一行資料轉化為：WHEN 'VIP' THEN 0.8。
+      * 注意：''%s'' 用了兩個單引號，這在 SQLite 中代表字串內部的單引號轉義。
+   2. 中層 group_concat(..., ' ')
+   * 把內層產生出來的多行 WHEN 子句，用空格串接成一整條長字串。
+      * 串接後的結果為：WHEN 'VIP' THEN 0.8 WHEN 'Gold' THEN 0.9 WHEN 'Normal' THEN 1.0。
+   3. 外層 printf('CASE level %s ELSE 1.0 END', ...)
+   * 將串接好的多個條件，塞入 CASE level ... ELSE ... END 的骨架中，完成最終的 SQL 語句。
+   
+------------------------------
+## 💡 延伸：自動產生「整條」查詢語句
+如果您想直接生成一條完整的 SELECT 語句，可以直接在外層擴充：
+```sql
+SELECT printf(
+    'SELECT order_id, price, (price * (CASE level %s ELSE 1.0 END)) AS final_price FROM orders;', 
+    group_concat(printf('WHEN ''%s'' THEN %.1f', level, rate), ' ')
+) AS complete_sql
+FROM discount_rules;
+```
+您目前正在設計的 CASE WHEN 邏輯，是用於將分類代碼轉換為中文名稱（例如 1->已付款、2->未付款），還是用於數值的計算轉換呢？
+請告訴我您的來源欄位名稱與期望的判斷邏輯，我能直接為您調整成最符合您需求的 SQL 範本！
+
