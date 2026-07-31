@@ -297,12 +297,14 @@ SELECT * FROM get_sales_by_year(2026);
 0x09 的 sqlite-statement-vtab 是一個優雅的參數化查詢封裝器；而 sqlean 的 define() 搭配 eval() 則是一個真正的動態程式碼執行引擎（元編程核心）。要解決「動態樞紐分析」這種欄位不確定的硬骨頭，只有後者這種具備動態重塑結構能力的工具才能完美勝任。 
 
 ## 七.define() 功能續談
-是的，這正是 define() 最迷人的地方。它可以用「純 SQL」把一段複雜的 SQL 邏輯封裝成一個自訂函數（UDF），在 SQLite 中完美扮演了「預存程序（Stored Procedure）」或「自訂函式（Function）」的角色。
-雖然 SQLite 官方因為輕量化設計，一直不肯加入 CREATE FUNCTION 或 CREATE PROCEDURE 語法，但 sqlean-define 透過 define() 函數，以一種非常巧妙的方式補齊了這個遺憾。
-以下為您說明它如何包裝純 SQL，以及它的兩種包裝形態（純量函數與表值函數）：
-## 1. 包裝「純量函數」（回傳單一數值）
-假設你有一段複雜的純 SQL 商業邏輯，例如「根據產品類別與銷售量計算折扣率」，原本每次查詢都要寫一長串 CASE WHEN，現在可以直接包裝起來：
+是的，這正是 define() 最迷人的地方。**它可以用「純 SQL」把一段複雜的 SQL 邏輯封裝成一個自訂函數（UDF），在 SQLite 中完美扮演了「預存程序（Stored Procedure）」或「自訂函式（Function）」的角色。**
 
+雖然 SQLite 官方因為輕量化設計，一直不肯加入 CREATE FUNCTION 或 CREATE PROCEDURE 語法，但 sqlean-define 透過 define() 函數，以一種非常巧妙的方式補齊了這個遺憾。
+
+以下為您說明它如何包裝純 SQL，以及它的兩種包裝形態（純量函數與表值函數）：
+### 1. 包裝「純量函數」（回傳單一數值）
+假設你有一段複雜的純 SQL 商業邏輯，例如「根據產品類別與銷售量計算折扣率」，原本每次查詢都要寫一長串 CASE WHEN，現在可以直接包裝起來：
+```sql
 -- 封裝純 SQL 邏輯（內部使用標準 SQL 語法）SELECT define(
     'calculate_discount', -- 函數名稱
     'CASE 
@@ -312,11 +314,11 @@ SELECT * FROM get_sales_by_year(2026);
      END'                  -- 純 SQL 運算邏輯，`:變數` 為傳入參數
 );
 -- 後端或查詢時，直接像內建函數一樣使用它：SELECT Product, calculate_discount(Category, Amount) AS DiscountFROM Sales;
-
-------------------------------
-## 2. 包裝「表值函數」（Table-Valued Function，回傳一張表）
+```
+---
+### 2. 包裝「表值函數」（Table-Valued Function，回傳一張表）
 define() 更強大的地方在於，它可以用純 SQL 包裝一整段 SELECT 查詢，並讓它表現得像一張動態的資料表。這可以完美替代「帶參數的 View（Parameterized View）」：
-
+```sql
 -- 封裝一個純 SQL 的 SELECT 查詢SELECT define(
     'get_high_sales', -- 函數名稱
     'SELECT Product, Amount 
@@ -324,19 +326,17 @@ define() 更強大的地方在於，它可以用純 SQL 包裝一整段 SELECT �
      WHERE Year = :target_year AND Amount >= :min_amount'
 );
 -- 查詢時，直接把函數當成資料表（Table）來用，並傳入參數：SELECT * FROM get_high_sales(2026, 500);
+```
+---
+### 與常規元編程的本質區別
+在前面聊到「動態 Pivot」時，我們是在 define() 裡面包了 eval()，那是因為 Dynamic Pivot 本質上需要**動態拼接字串並執行 DDL。**
 
-------------------------------
-## 與常規元編程的本質區別
-在前面聊到「動態 Pivot」時，我們是在 define() 裡面包了 eval()，那是因為 Dynamic Pivot 本質上需要動態拼接字串並執行 DDL。
-但如果只是普通的商務邏輯封裝（如上述的折扣計算、參數化篩選），define() 完全不需要 eval() 的介入。它就是純粹地把那段「純 SQL 語句」編譯並快取起來。
-## 總結
+但如果只是普通的商務邏輯封裝（如上述的折扣計算、參數化篩選），define() **完全不需要 eval() 的介入。**它就是純粹地把那段「純 SQL 語句」編譯並快取起來。
+### 總結
 define() 的出現，讓 SQLite 擁有了與大型資料庫（TSQL、PL/SQL）平起平坐的封裝能力：
 
 * 以前：這些邏輯必須寫在 Python / Node.js 等後端程式碼裡。
 * 現在：你可以用「純 SQL」將邏輯直接寫在資料庫裡，打包成一個個乾淨的函數。
-
-如果需要，我可以為您提供將「純量與表值函數的封裝範例」一併更新寫入剛才那份技術 md 檔案的完整版本！
-
 
 ---
 
