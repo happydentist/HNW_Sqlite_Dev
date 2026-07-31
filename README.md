@@ -337,6 +337,9 @@ FROM Sales;
 1. **必須選 `sqlean-define` 的場景**：需要處理 **Dynamic Pivot** 等欄位數量不固定的場景，或是函數內部需要動態組裝字串、執行 `INSERT/UPDATE/DDL` 等非唯讀操作。
 2. **可以選 `statement-vtab` 的場景**：純粹做固定欄位的「參數化查詢（如上述的表值函數）」
 
+* 想建立「純量函數」（如計算折扣、字串處理、日期轉換）：👉 只能選 sqlean-define，因為它能直接註冊為 SQLite 的純量函數。
+* 想建立「表值函數」（如參數化查詢、動態過濾資料表）：👉 兩者皆可。但若追求效能與 Prepared Statement 快取，0x09 的 sqlite-statement-vtab 在此特定場景表現更佳。
+
 ---
 
 ## 七.define() 功能續談
