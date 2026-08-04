@@ -358,7 +358,8 @@ FROM Sales;
 * sqlean-define（成功）：
 它可以搭配 eval() 執行動態語法。你可以把多條 INSERT、UPDATE 甚至 CREATE/DROP 語句用分號 ; 串接成字串，直接塞進 define() 中。這讓它具備了改寫資料庫狀態的能力，這才是真正的預存程序。
 ```sql
--- sqlean-define 獨家：可以做「寫入型」的預存程序SELECT define(
+-- sqlean-define 獨家：可以做「寫入型」的預存程序
+SELECT define(
     'sp_add_sale_and_log',
     'eval(printf(
         ''INSERT INTO Sales (Product, Year, Amount) VALUES ("%s", %d, %d); 
@@ -366,7 +367,8 @@ FROM Sales;
         :product, :year, :amount
     ))'
 );
--- 呼叫預存程序（同時影響兩個表）SELECT sp_add_sale_and_log('Banana', 2026, 150);
+-- 呼叫預存程序（同時影響兩個表）
+SELECT sp_add_sale_and_log('Banana', 2026, 150);
 ```
 ---
 ### 2. 多重陳述式與流程控制（Multi-Statement）：sqlean 的彈性更大
