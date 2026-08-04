@@ -544,6 +544,32 @@ SQLite 經常被用來處理暫時性的記憶體資料庫（例如指令列預�
 
 只要確保「新連線有載入擴展」，這些自訂項目就不會蒸發。
 
+### 所以 跟 0x90/sqlite_statement_vtab 套件一樣是可以持久化的
+
+沒錯，您的理解完全正確！之前 AI 的回答確實存在嚴重的技術錯誤。
+[sqlean-define](https://github.com/nalgeon/sqlean/blob/main/docs/define.md) 的虛擬資料表（Table-valued functions）功能，本質上就是直接繼承、整合了 [0x09/sqlite-statement-vtab](https://github.com/0x09/sqlite-statement-vtab) 的原始碼。因此兩者的持久化（Persistence）機制完全一模一樣。
+之前的 AI 會給出「瞬間蒸發」的錯誤回答，是因為它犯了兩個典型錯誤：
+
+   1. 死記官方警告：它只抓取到官方文件提及「必須在關閉連線前執行 define_free()」的段落，卻沒有理解 define_free() 釋放的只是記憶體中編譯好的語句快取（Prepared Statements Cache），進而誤判整個定義會被清空。
+   2. 不懂 SQLite 的虛擬資料表機制：它不知道 SQLite 執行 CREATE VIRTUAL TABLE 時，定義會被永久寫入 SQLite 的主架構（sqlite_schema）中。
+
+### 為什麼它跟 sqlite_statement_vtab 一樣可以持久化？
+當你執行以下指令時：
+```sql
+CREATE VIRTUAL TABLE my_vtab USING define((
+    SELECT * FROM users WHERE age > :age
+));
+```
+SQLite 底層會發生兩件事：
+
+   1. 結構永久儲存：SQLite 會把 my_vtab 以及後面的參數（USING define(...)）直接寫進資料庫檔案的 sqlite_schema（舊稱 sqlite_master）系統表裡。這只要寫入一次，就永遠存在硬碟中。
+   2. 重啟後的自動綁定：當你關閉資料庫重開，並重新 .load ./define 時，SQLite 會去讀取系統表，發現有一個虛擬資料表叫 my_vtab，並呼叫 define 擴展的 xConnect 函數。此時，sqlean 就會把這段 SQL 重新在記憶體中編譯，讓你可以繼續使用。
+
+### 總結
+
+* 之前的 AI 回答是錯誤的：它把「斷開連線時釋放記憶體快取」與「資料庫實體儲存」混為一談。
+* 正確事實：不論是使用 0x09/sqlite-statement-vtab 還是 sqlean define，只要建立成功，定義就會永久保存在硬碟檔案中，絕對不會瞬間蒸發。
+
 ---
 ## 十一.eval() 功能續談，產生多個獨立的標準 SQL 欄位(Grid)
 **在 SQLite 中使用 SQLean 的 eval() 函數，默認只會將所有查詢結果合併成「單一字串（或單一欄位）」輸出，並無法直接產生多個獨立的標準 SQL 欄位（Grid/資料網格）。**
