@@ -408,7 +408,8 @@ SELECT sp_add_sale_and_log('Banana', 2026, 150);
 ### 1. 包裝「純量函數」（回傳單一數值）
 假設你有一段複雜的純 SQL 商業邏輯，例如「根據產品類別與銷售量計算折扣率」，原本每次查詢都要寫一長串 CASE WHEN，現在可以直接包裝起來：
 ```sql
--- 封裝純 SQL 邏輯（內部使用標準 SQL 語法）SELECT define(
+-- 封裝純 SQL 邏輯（內部使用標準 SQL 語法）
+SELECT define(
     'calculate_discount', -- 函數名稱
     'CASE 
         WHEN :category = "Electronics" AND :amount > 1000 THEN 0.15
@@ -416,19 +417,22 @@ SELECT sp_add_sale_and_log('Banana', 2026, 150);
         ELSE 0.02
      END'                  -- 純 SQL 運算邏輯，`:變數` 為傳入參數
 );
--- 後端或查詢時，直接像內建函數一樣使用它：SELECT Product, calculate_discount(Category, Amount) AS DiscountFROM Sales;
+-- 後端或查詢時，直接像內建函數一樣使用它：
+SELECT Product, calculate_discount(Category, Amount) AS DiscountFROM Sales;
 ```
 ---
 ### 2. 包裝「表值函數」（Table-Valued Function，回傳一張表）
 define() 更強大的地方在於，它可以用純 SQL 包裝一整段 SELECT 查詢，並讓它表現得像一張動態的資料表。這可以完美替代「帶參數的 View（Parameterized View）」：
 ```sql
--- 封裝一個純 SQL 的 SELECT 查詢SELECT define(
+-- 封裝一個純 SQL 的 SELECT 查詢
+SELECT define(
     'get_high_sales', -- 函數名稱
     'SELECT Product, Amount 
      FROM Sales 
      WHERE Year = :target_year AND Amount >= :min_amount'
 );
--- 查詢時，直接把函數當成資料表（Table）來用，並傳入參數：SELECT * FROM get_high_sales(2026, 500);
+-- 查詢時，直接把函數當成資料表（Table）來用，並傳入參數：
+SELECT * FROM get_high_sales(2026, 500);
 ```
 ---
 ### 與常規元編程的本質區別
